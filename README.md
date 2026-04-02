@@ -1,132 +1,124 @@
 # Weather Station Risk Predictor
 
-A machine learning system that classifies Tamil Nadu weather stations into operational risk tiers — **Low**, **Moderate**, or **High** — based on four years of hourly rainfall telemetry.
+A machine learning system that classifies Tamil Nadu weather stations into operational risk tiers — **Low**, **Moderate**, or **High** — based on historical rainfall telemetry.
 
-The system is designed to support **parametric insurance for gig workers**, where payouts are triggered automatically by weather thresholds rather than manual claims.
+The system is designed to support **parametric insurance for gig workers**, where payouts can be triggered automatically using weather risk signals derived from rainfall data.
+
+The focus of this project is **interpretability and simplicity**. Instead of relying on complex deep learning models, the system combines clear rainfall statistics, interpretable scoring logic, and simple ensemble classifiers to estimate weather risk.
 
 ---
 
 # Dataset Description
 
 **Source:** Tamil Nadu State Water Resources Department — Surface Water and Groundwater telemetry network  
-**Coverage:** January 2022 to September 2025 (with sparse records from August 2021)  
-**Size:** 161,593 rows across **145 unique weather stations** in **36 districts**
+
+**Coverage:** January 2022 – September 2025  
+
+**Size:**  
+- 161,593 rainfall observations  
+- 145 weather stations  
+- 36 districts across Tamil Nadu  
 
 ## Key Columns
 
 | Column | Description |
 |------|------|
-| `Station` | Name of the weather station |
-| `District` | Administrative district |
-| `Latitude` / `Longitude` | Station coordinates |
-| `Data Acquisition Time` | Timestamp of the reading (DD-MM-YYYY HH:MM) |
-| `Telemetry Hourly Rainfall (mm)` | Rainfall recorded in that hour |
+| Station | Weather station name |
+| District | Administrative district |
+| Latitude / Longitude | Station coordinates |
+| Data Acquisition Time | Timestamp of rainfall measurement |
+| Telemetry Hourly Rainfall (mm) | Hourly rainfall recorded |
 
 ---
 
 # Machine Learning Approach
 
-The prediction task is a **three-class classification problem**.
+The problem is formulated as a **three-class classification task**.
 
-Given a station's complete rainfall history summarized into **15 engineered features**, the model predicts one of three risk labels:
+Each weather station is assigned one of three risk labels:
 
-- Low  
-- Moderate  
-- High  
+- Low Risk  
+- Moderate Risk  
+- High Risk  
 
----
+Rather than training directly on hourly data, rainfall time-series observations are **aggregated into station-level features** capturing rainfall behavior over multiple years.
 
-## Why Station-Level Aggregation
+This approach provides:
 
-The raw dataset is a **time series of hourly rainfall events**.
-
-Training directly on hourly rows would cause two problems:
-
-1. The model would learn **hour-level noise** rather than station-level characteristics.
-2. The same historical time series would be required during inference.
-
-Instead, the hourly rainfall data is **aggregated into a single feature vector per station** that captures rainfall behavior across multiple years.
+- better interpretability  
+- simpler model inputs  
+- stable predictions  
 
 ---
 
 # Feature Groups
 
-| Group | Features | What It Captures |
+| Group | Features | Description |
 |------|------|------|
-| Magnitude | avg_rain, std_rain, max_rain, median_rain | Typical and extreme rainfall intensity |
-| Rolling peaks | max_24h, avg_24h, p95_24h, max_72h | Flood-relevant rainfall accumulation |
+| Magnitude | avg_rain, std_rain, max_rain, median_rain | Rainfall intensity statistics |
+| Rolling peaks | max_24h, avg_24h, p95_24h, max_72h | Short-term rainfall accumulation |
 | Frequency | rain_freq, heavy_rate, extreme_rate | Frequency of rainfall events |
-| Seasonal | nemr_rain_share, sw_rain_share | Exposure to monsoon seasons |
+| Seasonal | nemr_rain_share, sw_rain_share | Monsoon rainfall exposure |
 | Spatial | latitude, longitude | Geographic location |
 
 ---
 
 # Classification Models
 
-Two ensemble models are trained and evaluated using cross-validation.
+Two ensemble models are trained and compared using cross-validation.
 
-## Gradient Boosting Classifier
+## Gradient Boosting
 
-Sequential ensemble model using decision trees.
-
-Configuration:
+Configuration
 max_depth = 3
 learning_rate = 0.05
 n_estimators = 300
 subsample = 0.8
 
----
+## Random Forest
 
-## Random Forest Classifier
-
-Parallel ensemble model using bagged decision trees.
-
-Configuration:
+Configuration
 max_depth = 6
 min_samples_leaf = 3
 class_weight = balanced
 n_estimators = 500
 
-Both models are wrapped with:
+Both models use probability calibration:
 CalibratedClassifierCV(method="isotonic")
 
-This improves **probability calibration**, producing reliable confidence scores.
+Calibration improves **probability reliability** instead of producing overconfident predictions.
 
 ---
 
 # Risk Score Formula
 
-Each station is assigned a **composite rainfall risk score** derived from weighted percentile ranking across rainfall features.
-
-## Composite Risk Score
+Before training, each station is assigned a **composite rainfall risk score** derived from weighted rainfall indicators.
 R_i = w1 * rank_norm(A_i) + w2 * rank_norm(H_i) + w3 * rank_norm(E_i) + w4 * rank_norm(F_i)
 
-Where:
+Where
 
-| Symbol | Variable | Weight | Description |
-|------|------|------|------|
-| A_i | avg_rain | 0.30 | Mean rainfall intensity |
-| H_i | heavy_rate | 0.30 | Fraction of hours rainfall > 10 mm |
-| E_i | extreme_rate | 0.25 | Fraction of hours rainfall > 30 mm |
-| F_i | rain_freq | 0.15 | Fraction of hours rainfall > 1 mm |
+| Variable | Meaning | Weight |
+|------|------|------|
+| A_i | Average rainfall intensity | 0.30 |
+| H_i | Heavy rainfall frequency (>10 mm) | 0.30 |
+| E_i | Extreme rainfall frequency (>30 mm) | 0.25 |
+| F_i | Rainfall occurrence frequency (>1 mm) | 0.15 |
 
-### Rank Normalization
+Rank normalization:
 rank_norm(x_i) = rank(x_i) / N
 
-Where:
-N = 145 stations
+Where **N = 145 stations**.
 
 ---
 
 # Risk Label Assignment
 
-Stations are divided into three classes based on percentile thresholds.
-risk_label_i =
+Stations are divided into three classes using percentile thresholds.
 Low if R_i < P33
-Moderate if P33 <= R_i < P67
-High if R_i >= P67
+Moderate if P33 ≤ R_i < P67
+High if R_i ≥ P67
 
-This produces an approximately balanced dataset:
+This produces a balanced dataset of approximately:
 
 - 48 Low-risk stations  
 - 49 Moderate-risk stations  
@@ -136,29 +128,23 @@ This produces an approximately balanced dataset:
 
 # Time-Series Feature Engineering
 
-Rolling rainfall statistics are calculated per station in chronological order.
-
-## Rolling Rainfall Accumulation
+Rolling rainfall features capture short-term rainfall bursts.
 rain_6h(s,t) = sum( rainfall(s,t-5) ... rainfall(s,t) )
 rain_24h(s,t) = sum( rainfall(s,t-23) ... rainfall(s,t) )
 rain_72h(s,t) = sum( rainfall(s,t-71) ... rainfall(s,t) )
 
-The **maximum 24-hour rainfall (`max_24h`)** captures extreme rainfall events.
+These rolling windows help detect **intense rainfall accumulation events**.
 
 ---
 
-## Rainfall Intensity Classification
+# Rainfall Event Definitions
+
+Rainfall intensity indicators:
 is_rainy(t) = 1 if rainfall(t) > 1 mm
 is_heavy(t) = 1 if rainfall(t) > 10 mm
 is_extreme(t) = 1 if rainfall(t) > 30 mm
 
-These indicators are aggregated to compute rainfall frequency statistics.
-
----
-
-## Seasonal Indicators
-
-Tamil Nadu experiences two major monsoon systems.
+Seasonal indicators:
 is_nemr_monsoon(t) = 1 if month(t) in {10,11,12}
 is_sw_monsoon(t) = 1 if month(t) in {6,7,8,9}
 
@@ -166,7 +152,7 @@ is_sw_monsoon(t) = 1 if month(t) in {6,7,8,9}
 
 # Model Training
 
-The dataset is split using stratified sampling.
+Training uses a **stratified train-test split** to preserve class balance.
 train_test_split(
 X,
 y,
@@ -175,7 +161,7 @@ stratify = y,
 random_state = 42
 )
 
-Probability calibration is applied using isotonic regression.
+Probability calibration is applied using:
 CalibratedClassifierCV(base_model, cv=5, method="isotonic")
 
 Model selection is based on **5-fold cross-validation accuracy**.
@@ -186,21 +172,23 @@ Model selection is based on **5-fold cross-validation accuracy**.
 
 Evaluation metrics include:
 
-- Accuracy
-- Confusion Matrix
-- Classification Report
-- Feature Importance
+- Accuracy  
+- Confusion Matrix  
+- Precision / Recall / F1 score  
+- Feature Importance  
 
-Typical result:
-Accuracy : 1.0000
+Typical results from the trained model are in the range:
+Accuracy : 0.85 – 0.95
 
-Top contributing features often include:
+Accuracy significantly higher than this could indicate overfitting due to the small dataset size (145 stations). Cross-validation is therefore used to ensure robust performance.
 
-- avg_rain
-- heavy_rate
-- avg_24h
-- extreme_rate
-- p95_24h
+Important features typically include:
+
+- avg_rain  
+- heavy_rate  
+- max_24h  
+- extreme_rate  
+- p95_24h  
 
 ---
 
@@ -208,20 +196,20 @@ Top contributing features often include:
 
 ## predict_risk()
 
-Displays a formatted terminal report for a given station.
+Returns a formatted station report.
 
 Example output:
 Weather Station Risk Report
 Station : Thiruvadanai_1
 District : Ramanathapuram
 Predicted Risk : HIGH
-Confidence : 91%
+Confidence : 0.91
 
 ---
 
 ## predict_station_risk()
 
-Returns API-compatible JSON output.
+Returns API-ready JSON output.
 
 Example:
 
@@ -237,34 +225,46 @@ Example:
     "High": 0.06
   }
 }
-Output Files
-File	Description
-weather_risk_model.joblib	Trained machine learning model
-station_features.csv	Aggregated station feature dataset
-station_risk_summary.csv	Station statistics and predicted risk
-risk_probabilities.csv	Probability scores for each station
-How to Run
-Step 1 — Clone the repository
+
+## Output Files
+
+| File | Description |
+|------|-------------|
+| `weather_risk_model.joblib` | Trained machine learning model |
+| `station_features.csv` | Aggregated station feature dataset |
+| `station_risk_summary.csv` | Station statistics and predicted risk |
+| `risk_probabilities.csv` | Probability predictions for each station |
+
+---
+
+## How to Run
+
+### 1. Clone the repository
+
+```bash
 git clone https://github.com/ss120406/weather-risk-predictor.git
 cd weather-risk-predictor
-Step 2 — Create a virtual environment
+
+### 2. Create a virtual environment
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
-Windows:
+Windows
 venv\Scripts\activate
-Step 3 — Install dependencies
+
+### 3. Install dependencies
+
+```bash
 pip install pandas numpy scipy scikit-learn joblib
-Step 4 — Place the dataset
+
+### 4. Place the dataset
+
+```bash
 Copy the rainfall dataset into:
 data/rainfall_tel_hr_tamil_nadu_sw_gw_tn_2021_2025.csv
-Step 5 — Run the pipeline
+
+### 5. Run the pipeline
+
+```bash
 python weather_risk_predictor.py
-Step 6 — Interactive prediction
-Example:
-Enter station name: Anaikidangu
-Output:
-Station    : Anaikidangu
-District   : Kanyakumari
-Risk Level : Low
-Confidence : 0.76
-Type quit to exit.
