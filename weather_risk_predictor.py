@@ -524,30 +524,7 @@ def predict_risk(station_name, model, station_df, verbose=True):
 
 def predict_station_risk(station, model, station_df):
     """
-    API-compatible prediction function.
-
-    Returns a JSON-serialisable dict. Suitable for REST APIs, Supabase
-    Edge Functions, FastAPI endpoints, etc.
-
-    Example output
-    --------------
-    {
-      "station":       "Anaikidangu",
-      "district":      "Kanyakumari",
-      "latitude":      8.2347,
-      "longitude":     77.3779,
-      "risk_level":    "High",
-      "risk_code":     2,
-      "confidence":    0.8712,
-      "probabilities": {"Low": 0.04, "Moderate": 0.09, "High": 0.87},
-      "key_features": {
-        "avg_rain_mmhr": 4.53,
-        "max_24h_mm":    182.0,
-        "heavy_pct":     "15.3%",
-        "extreme_pct":   "4.8%",
-        "rainy_pct":     "51.1%"
-      }
-    }
+    API-compatible prediction function with proper probability outputs.
     """
     try:
         row = _lookup_station(station, station_df)
@@ -555,48 +532,72 @@ def predict_station_risk(station, model, station_df):
         return {"error": str(e)}
 
     X_row = row[FEATURE_COLS].values.reshape(1, -1)
+
+    # Predictions
     code  = int(model.predict(X_row)[0])
+    proba = model.predict_proba(X_row)[0]   # ✅ FIXED
+
     risk  = LABEL_MAP[code]
-
-    # Use risk_score for honest confidence instead of model probabilities
-    score = float(row["risk_score"])  # 0 to 1
-
-    # Convert score into per-class confidence honestly
-    if code == 2:       # High
-        high_conf = score
-        low_conf  = 1 - score
-        mod_conf  = 0.0
-    elif code == 0:     # Low
-        low_conf  = 1 - score
-        high_conf = score
-        mod_conf  = 0.0
-    else:               # Moderate
-        mod_conf  = 1 - abs(score - 0.5) * 2
-        high_conf = score * (1 - mod_conf)
-        low_conf  = (1 - score) * (1 - mod_conf)
 
     return {
         "station":    row["Station"],
         "district":   row["district"],
         "latitude":   round(float(row["latitude"]),  4),
         "longitude":  round(float(row["longitude"]), 4),
+
         "risk_level": risk,
         "risk_code":  code,
-        "risk_score": round(score, 4),
-        "confidence": round(max(high_conf, mod_conf, low_conf), 4),
+
+        # Keep interpretable score
+        "risk_score": round(float(row["risk_score"]), 4),
+
+        # Model confidence
+        "confidence": round(float(max(proba)), 4),
+
+        # Clean probability output (single source of truth)
         "probabilities": {
-            "Low":      round(low_conf,  4),
-            "Moderate": round(mod_conf,  4),
-            "High":     round(high_conf, 4),
+            "Low":      round(float(proba[0]), 4),
+            "Moderate": round(float(proba[1]), 4),
+            "High":     round(float(proba[2]), 4),
         },
+
+        # Flat columns (useful for frontend + CSV)
+        "prob_low":      round(float(proba[0]), 4),
+        "prob_moderate": round(float(proba[1]), 4),
+        "prob_high":     round(float(proba[2]), 4),
+
         "key_features": {
-            "avg_rain_mmhr": round(float(row["avg_rain"]),     2),
-            "max_24h_mm":    round(float(row["max_24h"]),      1),
+            "avg_rain_mmhr": round(float(row["avg_rain"]), 2),
+            "max_24h_mm":    round(float(row["max_24h"]), 1),
             "heavy_pct":     f"{row['heavy_rate']*100:.1f}%",
             "extreme_pct":   f"{row['extreme_rate']*100:.1f}%",
             "rainy_pct":     f"{row['rain_freq']*100:.1f}%",
         },
     }
+
+def export_probabilities_csv(model, station_df, output_path="outputs/risk_probabilities.csv"):
+    rows = []
+    for _, row in station_df.iterrows():
+        X_row  = row[FEATURE_COLS].values.reshape(1, -1)
+        code   = int(model.predict(X_row)[0])
+        proba  = model.predict_proba(X_row)[0]
+
+        rows.append({
+            "station":       row["Station"],
+            "district":      row["district"],
+            "latitude":      round(float(row["latitude"]),  4),
+            "longitude":     round(float(row["longitude"]), 4),
+            "predicted_label": LABEL_MAP[code],
+            "risk_score":    round(float(row["risk_score"]), 4),
+            "prob_low":      round(float(proba[0]), 4),
+            "prob_moderate": round(float(proba[1]), 4),
+            "prob_high":     round(float(proba[2]), 4),
+        })
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_path, index=False)
+    print(f"[export]  OK  Probability scores -> {output_path}")
+    return df
 
 # -- internal lookup helper ---------------------------------------------------
 
@@ -914,6 +915,10 @@ if __name__ == "__main__":
     summary.to_csv(SUMMARY_PATH, index=False)
     print(f"\n[export]  OK  Station risk summary -> {SUMMARY_PATH}")
 
+    # Export probability scores for all stations
+    prob_df = export_probabilities_csv(model, station_df)
+    print(prob_df[["station", "predicted_label", "prob_low", "prob_moderate", "prob_high"]].head(10).to_string(index=False))
+
     # 5. Supabase integration demo
     # supabase_integration_demo(station_df, model)
 
@@ -936,7 +941,13 @@ if __name__ == "__main__":
             print(f"\n  Station    : {result['station']}")
             print(f"  District   : {result['district']}")
             print(f"  Risk Level : {result['risk_level']}")
-            print(f"  Confidence : {result['confidence']*100:.1f}%")
-            print(f"  Scores     : Low {result['probabilities']['Low']*100:.0f}%  "
-                  f"Moderate {result['probabilities']['Moderate']*100:.0f}%  "
-                  f"High {result['probabilities']['High']*100:.0f}%\n")
+
+            print(f"\n  --- Probabilities ---")
+            print(f"  Low      : {result['prob_low']:.4f}")
+            print(f"  Moderate : {result['prob_moderate']:.4f}")
+            print(f"  High     : {result['prob_high']:.4f}")
+
+            print(f"\n  Confidence (max prob): {result['confidence']:.4f}")
+
+            # Optional (VERY good for demo)
+            print(f"  Risk Score (interpretable): {result['risk_score']}\n")
