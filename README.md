@@ -244,27 +244,14 @@ Example:
 ```bash
 git clone https://github.com/ss120406/weather-risk-predictor.git
 cd weather-risk-predictor
-
-### 2. Create a virtual environment
-
-```bash
+2. Create a virtual environment
 python3 -m venv venv
 source venv/bin/activate
-Windows
+Windows:
 venv\Scripts\activate
-
-### 3. Install dependencies
-
-```bash
+3. Install dependencies
 pip install pandas numpy scipy scikit-learn joblib
-
-### 4. Place the dataset
-
-```bash
+4. Place the dataset
 Copy the rainfall dataset into:
 data/rainfall_tel_hr_tamil_nadu_sw_gw_tn_2021_2025.csv
-
-### 5. Run the pipeline
-
-```bash
-python weather_risk_predictor.py
+5. Run the pipeline
